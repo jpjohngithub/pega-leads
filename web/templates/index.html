@@ -1,0 +1,225 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Radar de Leads & Mapas</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+    body { display: flex; height: 100vh; background: #0f172a; color: #f8fafc; overflow: hidden; }
+    #sidebar { width: 460px; height: 100%; display: flex; flex-direction: column; background: #1e293b; border-right: 1px solid #334155; }
+    .header { padding: 18px 20px; background: #0f172a; border-bottom: 1px solid #334155; }
+    .header h1 { font-size: 1.15rem; display: flex; align-items: center; gap: 8px; color: #38bdf8; }
+    .badge { font-size: 0.7rem; padding: 2px 8px; border-radius: 12px; }
+    .badge.online { background: #065f46; color: #34d399; }
+    .badge.offline { background: #881337; color: #fda4af; }
+    .form-panel { padding: 16px 20px; display: flex; flex-direction: column; gap: 10px; border-bottom: 1px solid #334155; }
+    .input-group { display: flex; flex-direction: column; gap: 4px; }
+    .input-group label { font-size: 0.75rem; color: #94a3b8; text-transform: uppercase; }
+    .input-group input, .input-group select { background: #0f172a; border: 1px solid #334155; color: #f8fafc; padding: 8px 12px; border-radius: 6px; font-size: 0.9rem; }
+    .row { display: flex; gap: 10px; }
+    .btn { background: #0284c7; border: none; color: white; padding: 10px; border-radius: 6px; font-weight: 600; cursor: pointer; display: flex; justify-content: center; align-items: center; gap: 8px; margin-top: 4px; }
+    .btn:hover { background: #0369a1; }
+    .btn:disabled { background: #475569; cursor: not-allowed; }
+    #results-list { flex: 1; overflow-y: auto; padding: 12px; display: flex; flex-direction: column; gap: 10px; }
+    .card { background: #0f172a; border: 1px solid #334155; border-radius: 8px; padding: 12px; font-size: 0.85rem; cursor: pointer; transition: border-color .2s; }
+    .card:hover { border-color: #38bdf8; }
+    .card-title { font-size: 1rem; font-weight: bold; color: #e2e8f0; margin-bottom: 4px; }
+    .card-cat { color: #94a3b8; font-size: 0.75rem; margin-bottom: 8px; }
+    .contact-item { display: flex; align-items: center; gap: 8px; margin: 4px 0; color: #cbd5e1; word-break: break-all; }
+    .contact-item i { color: #38bdf8; width: 14px; text-align: center; }
+    .social-links { display: flex; gap: 8px; margin-top: 8px; }
+    .social-btn { padding: 4px 8px; border-radius: 4px; font-size: 0.75rem; text-decoration: none; display: flex; align-items: center; gap: 4px; }
+    .ig { background: #833ab4; color: white; }
+    .fb { background: #1877f2; color: white; }
+    .li { background: #0a66c2; color: white; }
+    #map { flex: 1; height: 100%; }
+    .export-bar { padding: 10px 20px; background: #0f172a; border-top: 1px solid #334155; display: flex; justify-content: space-between; align-items: center; font-size: 0.8rem; }
+    .btn-export { background: #10b981; border: none; color: white; padding: 6px 12px; border-radius: 4px; cursor: pointer; }
+  </style>
+</head>
+<body>
+
+  <div id="sidebar">
+    <div class="header">
+      <h1><i class="fa-solid fa-crosshairs"></i> Radar de Leads & Contatos</h1>
+      <div style="margin-top: 6px; display: flex; align-items: center; gap: 6px;">
+        <span style="font-size: 0.75rem; color: #94a3b8;">Status Scraper Engine:</span>
+        <span id="engine-status" class="badge offline">Verificando...</span>
+      </div>
+    </div>
+
+    <div class="form-panel">
+      <div class="input-group">
+        <label>Segmento / Palavra-chave</label>
+        <input type="text" id="keyword" placeholder="ex: Academias, Clinicas Odontologicas" value="Academias">
+      </div>
+      <div class="row">
+        <div class="input-group" style="flex: 2;">
+          <label>Cidade / Localidade</label>
+          <input type="text" id="city" placeholder="ex: Sao Paulo, SP" value="Sao Paulo, SP">
+        </div>
+        <div class="input-group" style="flex: 1;">
+          <label>Profundidade</label>
+          <select id="depth">
+            <option value="1">1 (Rápido)</option>
+            <option value="3" selected>3 (~60)</option>
+            <option value="5">5 (~100)</option>
+          </select>
+        </div>
+      </div>
+      <label style="font-size: 0.8rem; display: flex; align-items: center; gap: 6px; cursor: pointer;">
+        <input type="checkbox" id="socials" checked> Rastrear Redes Sociais (Instagram, FB, LinkedIn)
+      </label>
+      <button class="btn" id="btn-search" onclick="searchLeads()">
+        <i class="fa-solid fa-magnifying-glass"></i> Rastrear Leads
+      </button>
+    </div>
+
+    <div id="results-list">
+      <div style="text-align: center; color: #64748b; margin-top: 30px;">
+        Insira os filtros acima e clique em Rastrear Leads.
+      </div>
+    </div>
+
+    <div class="export-bar">
+      <span id="results-count">0 leads encontrados</span>
+      <button class="btn-export" onclick="exportCSV()"><i class="fa-solid fa-download"></i> Baixar CSV</button>
+    </div>
+  </div>
+
+  <div id="map"></div>
+
+  <script>
+    const map = L.map('map').setView([-23.5505, -46.6333], 12);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      maxZoom: 19,
+      attribution: '© OpenStreetMap'
+    }).addTo(map);
+
+    let markers = [];
+    let currentLeads = [];
+
+    // Checa motor local
+    fetch('/api/status').then(r => r.json()).then(data => {
+      const st = document.getElementById('engine-status');
+      if (data.engine_online) {
+        st.innerText = 'ONLINE (localhost:8080)';
+        st.className = 'badge online';
+      } else {
+        st.innerText = 'OFFLINE (Inicie o Docker)';
+        st.className = 'badge offline';
+      }
+    }).catch(() => {});
+
+    function searchLeads() {
+      const keyword = document.getElementById('keyword').value.trim();
+      const city = document.getElementById('city').value.trim();
+      const depth = document.getElementById('depth').value;
+      const socials = document.getElementById('socials').checked;
+      const btn = document.getElementById('btn-search');
+
+      if (!keyword || !city) return alert('Preencha palavra-chave e cidade.');
+
+      btn.disabled = true;
+      btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Minerando Leads...';
+      document.getElementById('results-list').innerHTML = '<div style="text-align:center; color:#38bdf8; margin-top:30px;"><i class="fa-solid fa-satellite-dish fa-spin fa-2x"></i><br><br>Conectando ao Google Maps e rastreando redes sociais...</div>';
+
+      fetch('/api/search', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ keyword, city, depth, socials })
+      })
+      .then(r => r.json())
+      .then(data => {
+        btn.disabled = false;
+        btn.innerHTML = '<i class="fa-solid fa-magnifying-glass"></i> Rastrear Leads';
+        if (!data.success) {
+          alert('Erro: ' + data.error);
+          document.getElementById('results-list').innerHTML = `<div style="color:#ef4444; padding:10px;">${data.error}</div>`;
+          return;
+        }
+        currentLeads = data.leads || [];
+        renderLeads(currentLeads);
+      })
+      .catch(err => {
+        btn.disabled = false;
+        btn.innerHTML = '<i class="fa-solid fa-magnifying-glass"></i> Rastrear Leads';
+        alert('Falha na requisição: ' + err);
+      });
+    }
+
+    function renderLeads(leads) {
+      document.getElementById('results-count').innerText = `${leads.length} leads encontrados`;
+      const container = document.getElementById('results-list');
+      container.innerHTML = '';
+      markers.forEach(m => map.removeLayer(m));
+      markers = [];
+
+      const bounds = [];
+
+      leads.forEach((l, idx) => {
+        // Marcador no mapa
+        const lat = parseFloat(l.latitude);
+        const lon = parseFloat(l.longitude);
+        if (!isNaN(lat) && !isNaN(lon)) {
+          const m = L.marker([lat, lon]).addTo(map);
+          m.bindPopup(`<b>${l.title || ''}</b><br>${l.phone || ''}<br>${l.address || ''}`);
+          markers.push(m);
+          bounds.push([lat, lon]);
+        }
+
+        // Cartao
+        const card = document.createElement('div');
+        card.className = 'card';
+        card.onclick = () => {
+          if (!isNaN(lat) && !isNaN(lon)) {
+            map.flyTo([lat, lon], 16);
+            markers[idx]?.openPopup();
+          }
+        };
+
+        let socialsHtml = '';
+        if (l.instagram) socialsHtml += `<a href="${l.instagram}" target="_blank" class="social-btn ig"><i class="fa-brands fa-instagram"></i> IG</a>`;
+        if (l.facebook) socialsHtml += `<a href="${l.facebook}" target="_blank" class="social-btn fb"><i class="fa-brands fa-facebook"></i> FB</a>`;
+        if (l.linkedin) socialsHtml += `<a href="${l.linkedin}" target="_blank" class="social-btn li"><i class="fa-brands fa-linkedin"></i> LI</a>`;
+
+        card.innerHTML = `
+          <div class="card-title">${l.title || 'Sem Nome'}</div>
+          <div class="card-cat">${l.category || ''} | ⭐ ${l.review_rating || '-'} (${l.review_count || '0'})</div>
+          ${l.phone ? `<div class="contact-item"><i class="fa-solid fa-phone"></i> ${l.phone}</div>` : ''}
+          ${l.emails ? `<div class="contact-item"><i class="fa-solid fa-envelope"></i> ${l.emails}</div>` : ''}
+          ${l.website ? `<div class="contact-item"><i class="fa-solid fa-globe"></i> <a href="${l.website}" target="_blank" style="color:#38bdf8">${l.website}</a></div>` : ''}
+          ${l.address ? `<div class="contact-item"><i class="fa-solid fa-location-dot"></i> ${l.address}</div>` : ''}
+          ${socialsHtml ? `<div class="social-links">${socialsHtml}</div>` : ''}
+        `;
+        container.appendChild(card);
+      });
+
+      if (bounds.length > 0) {
+        map.fitBounds(bounds, { padding: [20, 20] });
+      }
+    }
+
+    function exportCSV() {
+      if (!currentLeads.length) return alert('Nenhum lead para exportar.');
+      const headers = ["title", "phone", "emails", "website", "category", "address", "latitude", "longitude", "instagram", "facebook", "linkedin"];
+      let csvContent = "data:text/csv;charset=utf-8," + headers.join(",") + "\n";
+      currentLeads.forEach(r => {
+        const row = headers.map(h => `"${(r[h] || '').toString().replace(/"/g, '""')}"`);
+        csvContent += row.join(",") + "\n";
+      });
+      const encodedUri = encodeURI(csvContent);
+      const link = document.createElement("a");
+      link.setAttribute("href", encodedUri);
+      link.setAttribute("download", "leads_export.csv");
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+    }
+  </script>
+</body>
+</html>
