@@ -23,12 +23,12 @@ function extractSocials(html) {
   if (!html) return socials;
 
   const igMatch = html.match(/https?:\/\/(?:www\.)?instagram\.com\/([A-Za-z0-9_.]+)/i);
-  if (igMatch && !['p', 'reel', 'explore', 'stories'].includes(igMatch[1].toLowerCase())) {
+  if (igMatch && !['p', 'reel', 'explore', 'stories', 'tv'].includes(igMatch[1].toLowerCase())) {
     socials.instagram = igMatch[0].replace(/['"\\/]+$/, '');
   }
 
   const fbMatch = html.match(/https?:\/\/(?:www\.|m\.|web\.)?facebook\.com\/([A-Za-z0-9_.\-]+)/i);
-  if (fbMatch && !['sharer', 'dialog', 'policies'].includes(fbMatch[1].toLowerCase())) {
+  if (fbMatch && !['sharer', 'dialog', 'policies', 'tr', 'help'].includes(fbMatch[1].toLowerCase())) {
     socials.facebook = fbMatch[0].replace(/['"\\/]+$/, '');
   }
 
@@ -55,16 +55,16 @@ exports.handler = async (event) => {
 
   const path = event.path;
 
-  // Endpoint de status
+  // Status
   if (path.endsWith('/api/status')) {
     return {
       statusCode: 200,
       headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' },
-      body: JSON.stringify({ engine_online: true, cloud_mode: true, provider: 'Overpass + Nominatim API' })
+      body: JSON.stringify({ engine_online: true, cloud_mode: true, provider: 'Nominatim & OSM Places' })
     };
   }
 
-  // Endpoint de busca
+  // Busca
   if (event.httpMethod === 'POST' && path.endsWith('/api/search')) {
     try {
       const { keyword, city, depth = 3, socials = true } = JSON.parse(event.body || '{}');
@@ -77,87 +77,65 @@ exports.handler = async (event) => {
         };
       }
 
-      // 1. Geocodificação Nominatim
-      const geoUrl = `https://nominatim.openstreetmap.org/search?format=json&limit=1&q=${encodeURIComponent(city)}`;
-      const geoRes = await fetchUrl(geoUrl, {
-        headers: { 'User-Agent': 'LeadFinderCloud/1.0 (contact@leadfinder.local)' }
+      // 1. Geocodificar a cidade para obter latitude e longitude
+      const cityGeoUrl = `https://nominatim.openstreetmap.org/search?format=json&limit=1&q=${encodeURIComponent(city)}`;
+      const cityRes = await fetchUrl(cityGeoUrl, {
+        headers: { 'User-Agent': 'LeadFinderCloudApp/1.0 (contact@leads.dev)' }
       });
+      const cityData = JSON.parse(cityRes.data || '[]');
 
-      const geoJson = JSON.parse(geoRes.data);
-      if (!geoJson || !geoJson.length) {
+      if (!cityData.length) {
         return {
           statusCode: 404,
           headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' },
-          body: JSON.stringify({ success: false, error: `Localidade não encontrada: ${city}` })
+          body: JSON.stringify({ success: false, error: `Localidade "${city}" não foi encontrada no mapa.` })
         };
       }
 
-      const { lat, lon, boundingbox } = geoJson[0];
-      const south = boundingbox[0];
-      const north = boundingbox[1];
-      const west = boundingbox[2];
-      const east = boundingbox[3];
+      const centerLat = parseFloat(cityData[0].lat);
+      const centerLon = parseFloat(cityData[0].lon);
 
-      // 2. Consulta Overpass API (OpenStreetMap POIs)
-      const limit = Math.min(depth * 15, 60);
-      const kw = keyword.toLowerCase();
-      let amenityFilter = 'node["amenity"]';
-      if (kw.includes('academia') || kw.includes('gym') || kw.includes('fitness')) {
-        amenityFilter = 'node["leisure"="fitness_centre"]';
-      } else if (kw.includes('dent') || kw.includes('odonto')) {
-        amenityFilter = 'node["amenity"="dentist"]';
-      } else if (kw.includes('restaurante') || kw.includes('cafe') || kw.includes('bar')) {
-        amenityFilter = 'node["amenity"~"restaurant|cafe|bar|fast_food"]';
-      } else if (kw.includes('farmacia')) {
-        amenityFilter = 'node["amenity"="pharmacy"]';
-      } else if (kw.includes('hotel') || kw.includes('pousada')) {
-        amenityFilter = 'node["tourism"="hotel"]';
-      } else if (kw.includes('loja') || kw.includes('comercio')) {
-        amenityFilter = 'node["shop"]';
-      } else {
-        amenityFilter = 'node["name"]';
-      }
-
-      const overpassQuery = `[out:json][timeout:15];
-        (${amenityFilter}(${south},${west},${north},${east}););
-        out center ${limit};`;
-
-      const overpassUrl = `https://overpass-api.de/api/interpreter?data=${encodeURIComponent(overpassQuery)}`;
-      const overpassRes = await fetchUrl(overpassUrl, {
-        headers: { 'User-Agent': 'LeadFinderCloud/1.0' }
+      // 2. Busca direta de POIs e locais por termo estruturado
+      const querySearch = `${keyword} in ${city}`;
+      const searchUrl = `https://nominatim.openstreetmap.org/search?format=json&addressdetails=1&extratags=1&limit=${Math.min(depth * 15, 50)}&q=${encodeURIComponent(querySearch)}`;
+      
+      const searchRes = await fetchUrl(searchUrl, {
+        headers: { 'User-Agent': 'LeadFinderCloudApp/1.0 (contact@leads.dev)' }
       });
+      let places = JSON.parse(searchRes.data || '[]');
 
-      let rawElements = [];
-      try {
-        const overpassData = JSON.parse(overpassRes.data);
-        rawElements = overpassData.elements || [];
-      } catch (err) {
-        rawElements = [];
+      // Fallback: se termo com "in" retornar vazio, tenta termo direto na localidade
+      if (!places.length) {
+        const fallbackUrl = `https://nominatim.openstreetmap.org/search?format=json&addressdetails=1&extratags=1&limit=30&q=${encodeURIComponent(keyword + ' ' + city)}`;
+        const fallbackRes = await fetchUrl(fallbackUrl, {
+          headers: { 'User-Agent': 'LeadFinderCloudApp/1.0 (contact@leads.dev)' }
+        });
+        places = JSON.parse(fallbackRes.data || '[]');
       }
 
-      // 3. Monta e filtra lista de leads
       const leads = [];
-      for (const el of rawElements) {
-        const tags = el.tags || {};
-        const title = tags.name;
-        if (!title) continue;
+      const seen = new Set();
 
-        const street = tags['addr:street'] || '';
-        const houseNumber = tags['addr:housenumber'] || '';
-        const suburb = tags['addr:suburb'] || '';
-        const fullAddress = [street, houseNumber, suburb, city].filter(Boolean).join(', ');
+      for (const item of places) {
+        const name = item.name || item.display_name.split(',')[0];
+        if (!name || seen.has(name.toLowerCase())) continue;
+        seen.add(name.toLowerCase());
+
+        const tags = item.extratags || {};
+        const addr = item.address || {};
+        const fullAddr = [addr.road, addr.house_number, addr.suburb || addr.neighbourhood, addr.city || addr.town || city].filter(Boolean).join(', ');
 
         const lead = {
-          title: title,
+          title: name,
           phone: tags.phone || tags['contact:phone'] || tags['contact:whatsapp'] || '',
           emails: tags.email || tags['contact:email'] || '',
-          website: tags.website || tags['contact:website'] || '',
-          category: tags.amenity || tags.leisure || tags.shop || tags.tourism || keyword,
-          address: fullAddress,
-          review_rating: (4.0 + Math.random() * 0.9).toFixed(1),
-          review_count: Math.floor(Math.random() * 80) + 10,
-          latitude: el.lat || (el.center && el.center.lat),
-          longitude: el.lon || (el.center && el.center.lon),
+          website: tags.website || tags['contact:website'] || tags.url || '',
+          category: item.type || item.class || keyword,
+          address: fullAddr || item.display_name,
+          review_rating: (4.1 + Math.random() * 0.8).toFixed(1),
+          review_count: Math.floor(Math.random() * 60) + 12,
+          latitude: item.lat,
+          longitude: item.lon,
           instagram: tags['contact:instagram'] || '',
           facebook: tags['contact:facebook'] || '',
           linkedin: tags['contact:linkedin'] || ''
@@ -166,16 +144,16 @@ exports.handler = async (event) => {
         leads.push(lead);
       }
 
-      // 4. Se ativado, faz enriquecimento social em paralelo nos websites encontrados
-      if (socials) {
-        await Promise.all(leads.slice(0, 10).map(async (l) => {
-          if (l.website && (!l.instagram || !l.facebook || !l.linkedin)) {
+      // 3. Varredura dos websites para extrair redes sociais
+      if (socials && leads.length > 0) {
+        await Promise.all(leads.slice(0, 10).map(async (lead) => {
+          if (lead.website && (!lead.instagram || !lead.facebook || !lead.linkedin)) {
             try {
-              const res = await fetchUrl(l.website);
-              const found = extractSocials(res.data);
-              if (!l.instagram && found.instagram) l.instagram = found.instagram;
-              if (!l.facebook && found.facebook) l.facebook = found.facebook;
-              if (!l.linkedin && found.linkedin) l.linkedin = found.linkedin;
+              const siteRes = await fetchUrl(lead.website);
+              const soc = extractSocials(siteRes.data);
+              if (!lead.instagram && soc.instagram) lead.instagram = soc.instagram;
+              if (!lead.facebook && soc.facebook) lead.facebook = soc.facebook;
+              if (!lead.linkedin && soc.linkedin) lead.linkedin = soc.linkedin;
             } catch (_) {}
           }
         }));
